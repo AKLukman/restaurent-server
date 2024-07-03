@@ -30,7 +30,7 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
     const usersCollection = client.db("restaurentDB").collection("users");
     const menuCollection = client.db("restaurentDB").collection("menu");
     const reviewsCollection = client.db("restaurentDB").collection("reviews");
@@ -224,7 +224,7 @@ async function run() {
       }
 
       const result = await paymentsCollection.find(query).toArray();
-      console.log(result);
+      // console.log(result);
       res.send(result);
     });
 
@@ -233,7 +233,7 @@ async function run() {
       const paymentResult = await paymentsCollection.insertOne(payment);
 
       //  carefully delete each item from the cart
-      console.log("payment info", payment);
+      // console.log("payment info", payment);
       const query = {
         _id: {
           $in: payment.cartIds.map((id) => new ObjectId(id)),
@@ -246,11 +246,82 @@ async function run() {
       res.send({ paymentResult, deleteResult });
     });
 
+    // stats or analytics
+    app.get("/admin-stats", verifyToken, verifyAdmin, async (req, res) => {
+      const users = await usersCollection.estimatedDocumentCount();
+      const menuItems = await menuCollection.estimatedDocumentCount();
+      const orders = await paymentsCollection.estimatedDocumentCount();
+
+      // aggregiation better way
+      const result = await paymentsCollection
+        .aggregate([
+          {
+            $group: {
+              _id: null,
+              totalRevinue: {
+                $sum: "$price",
+              },
+            },
+          },
+        ])
+        .toArray();
+      const revenue = result.length > 0 ? result[0].totalRevinue : 0;
+      // its not best practice
+      // const revinue = payments.reduce(
+      //   (total, payment) => total + payment.price,
+      //   0
+      // );
+
+      res.send({ users, menuItems, orders, revenue });
+    });
+
+    // aggregiation pipeline
+    app.get("/order-stats", verifyToken, verifyAdmin, async (req, res) => {
+      const result = await paymentsCollection
+        // .find()
+        .aggregate([
+          {
+            $unwind: "$menuItemIds",
+          },
+          {
+            $lookup: {
+              from: "menu",
+              let: { menuItemId: { $toObjectId: "$menuItemIds" } },
+              pipeline: [
+                { $match: { $expr: { $eq: ["$_id", "$$menuItemId"] } } },
+              ],
+              as: "menuItems",
+            },
+          },
+          {
+            $unwind: "$menuItems",
+          },
+          {
+            $group: {
+              _id: "$menuItems.category",
+              quantity: { $sum: 1 },
+              revenue: { $sum: "$menuItems.price" },
+            },
+          },
+          {
+            $project: {
+              _id: 0,
+              category: "$_id",
+              quantity: "$quantity",
+              revenue: "$revenue",
+            },
+          },
+        ])
+        .toArray();
+
+      res.send(result);
+    });
+
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
